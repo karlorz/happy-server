@@ -1,0 +1,67 @@
+# docker-compose.yml for Coolify deployment
+services:
+    happy-server:
+        image: happy-server:latest
+        build:
+            context: .
+            dockerfile: Dockerfile
+        restart: unless-stopped
+        environment:
+            # Application configuration
+            - NODE_ENV=production
+            - PORT=${PORT:-3000}
+
+            # Coolify magic variable for FQDN (generates domain automatically)
+            - SERVICE_FQDN_HAPPY_SERVER_3000
+
+            # Database connection - use service name, not localhost
+            - DATABASE_URL=postgresql://${SERVICE_USER_POSTGRES:-postgres}:${SERVICE_PASSWORD_POSTGRES:?}@postgres:5432/${POSTGRES_DB:-happy-server}
+
+            # Redis connection - use service name, not localhost
+            - REDIS_URL=redis://redis:6379
+
+            # Security - required field with no default (must be set in Coolify UI)
+            - SEED=${SEED:?}
+        depends_on:
+            postgres:
+                condition: service_healthy
+            redis:
+                condition: service_healthy
+        healthcheck:
+            test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/health", "||", "exit", "1"]
+            interval: 10s
+            timeout: 5s
+            retries: 3
+            start_period: 30s
+
+    postgres:
+        image: postgres:15
+        restart: unless-stopped
+        environment:
+            - POSTGRES_DB=${POSTGRES_DB:-happy-server}
+            - POSTGRES_USER=${SERVICE_USER_POSTGRES:-postgres}
+            - POSTGRES_PASSWORD=${SERVICE_PASSWORD_POSTGRES:?}
+        volumes:
+            - postgres_data:/var/lib/postgresql/data
+        healthcheck:
+            test: ["CMD-SHELL", "pg_isready", "-U", "$${POSTGRES_USER}", "-d", "$${POSTGRES_DB}"]
+            interval: 5s
+            timeout: 5s
+            retries: 10
+            start_period: 10s
+
+    redis:
+        image: redis:7-alpine
+        restart: unless-stopped
+        volumes:
+            - redis_data:/data
+        healthcheck:
+            test: ["CMD", "redis-cli", "ping"]
+            interval: 5s
+            timeout: 3s
+            retries: 5
+            start_period: 5s
+
+volumes:
+    postgres_data:
+    redis_data:
