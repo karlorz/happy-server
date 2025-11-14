@@ -96,12 +96,6 @@ services:
             SERVICE_FQDN_MINIO_9001: ""
         volumes:
             - minio_data:/data
-        healthcheck:
-            test: ["CMD-SHELL", "curl -f http://localhost:9000/minio/health/live || exit 1"]
-            interval: 5s
-            timeout: 5s
-            retries: 10
-            start_period: 20s
 
     # Automatically creates bucket and sets public download permission
     minio-init:
@@ -109,7 +103,7 @@ services:
         exclude_from_hc: true  # Exclude from health checks - one-time init container
         depends_on:
             minio:
-                condition: service_healthy
+                condition: service_started
         entrypoint: ["sh", "-c"]
         environment:
             MINIO_ROOT_USER: ${SERVICE_USER_MINIO:-minioadmin}
@@ -117,13 +111,22 @@ services:
             S3_BUCKET: ${S3_BUCKET:-happy-server}
         command:
             - >
+                echo "[minio-init] Waiting for MinIO server to start...";
+                sleep 5;
                 echo "[minio-init] Setting up alias...";
-                mc alias set local http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" &&
-                echo "[minio-init] Waiting for MinIO to be ready...";
+                until mc alias set local http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" 2>/dev/null; do
+                  echo "[minio-init] MinIO not ready, retrying in 3s...";
+                  sleep 3;
+                done &&
+                echo "[minio-init] ✓ Alias configured successfully";
+                echo "[minio-init] Waiting for MinIO IAM to be fully ready...";
                 until mc ready --json local >/dev/null 2>&1; do
-                  echo "[minio-init] Still waiting...";
+                  echo "[minio-init] IAM not ready, waiting 2s...";
                   sleep 2;
                 done &&
+                echo "[minio-init] ✓ MinIO is fully ready";
+                echo "[minio-init] Additional wait for IAM initialization...";
+                sleep 5;
                 echo "[minio-init] Creating bucket: $S3_BUCKET";
                 if mc mb -p local/$S3_BUCKET 2>&1; then
                   echo "[minio-init] ✓ Bucket created successfully!";
@@ -131,6 +134,7 @@ services:
                   echo "[minio-init] ✓ Bucket already exists";
                 else
                   echo "[minio-init] ✗ ERROR: Failed to create bucket!";
+                  mc ls local/ 2>&1;
                   exit 1;
                 fi &&
                 echo "[minio-init] Setting anonymous download permission...";
