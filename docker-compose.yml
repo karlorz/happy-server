@@ -12,7 +12,6 @@ services:
             - PORT=${PORT:-3000}
 
             # Coolify will populate this with your custom domain from UI
-            # Set domain in Coolify UI: happy-server.domain.com
             - SERVICE_FQDN_HAPPY_SERVER_3000
 
             # Database connection - use service name, not localhost
@@ -34,19 +33,25 @@ services:
             # You must set this in Coolify UI manually
             # Format: https://your-minio-domain.domain.com/happy-server
             - S3_PUBLIC_URL=${S3_PUBLIC_URL:?}
+        ports:
+            - "127.0.0.1:3005:3000" 
         depends_on:
             postgres:
                 condition: service_healthy
             redis:
                 condition: service_healthy
             minio:
-                condition: service_healthy
+                condition: service_started
+            minio-init:
+                condition: service_completed_successfully
+        # Run migrations before starting the server
+        command: sh -c "npx prisma migrate deploy --schema /app/prisma/schema.prisma && yarn start"
         healthcheck:
-            test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/health", "||", "exit", "1"]
-            interval: 10s
-            timeout: 5s
+            test: ["CMD-SHELL", "wget -q -O - http://localhost:3000/health || exit 1"]
+            interval: 30s
+            timeout: 10s
             retries: 3
-            start_period: 30s
+            start_period: 40s
 
     postgres:
         image: postgres:15
@@ -55,23 +60,24 @@ services:
             - POSTGRES_DB=${POSTGRES_DB:-happy-server}
             - POSTGRES_USER=${SERVICE_USER_POSTGRES:-postgres}
             - POSTGRES_PASSWORD=${SERVICE_PASSWORD_POSTGRES:?}
+            - TZ=Asia/Shanghai
         volumes:
             - postgres_data:/var/lib/postgresql/data
         healthcheck:
-            test: ["CMD-SHELL", "pg_isready", "-U", "$${POSTGRES_USER}", "-d", "$${POSTGRES_DB}"]
-            interval: 5s
-            timeout: 5s
+            test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB} -h localhost"]
+            interval: 30s
+            timeout: 10s
             retries: 10
             start_period: 10s
 
     redis:
-        image: redis:7-alpine
+        image: redis:7.2-alpine
         restart: unless-stopped
         volumes:
             - redis_data:/data
         healthcheck:
             test: ["CMD", "redis-cli", "ping"]
-            interval: 5s
+            interval: 30s
             timeout: 3s
             retries: 5
             start_period: 5s
@@ -81,21 +87,42 @@ services:
         restart: unless-stopped
         command: server /data --console-address ":9001"
         environment:
-            - MINIO_ROOT_USER=${SERVICE_USER_MINIO:-minioadmin}
-            - MINIO_ROOT_PASSWORD=${SERVICE_PASSWORD_MINIO:?}
+            MINIO_ROOT_USER: ${SERVICE_USER_MINIO:-minioadmin}
+            MINIO_ROOT_PASSWORD: ${SERVICE_PASSWORD_MINIO:?}
             # Coolify will set these up based on domains you configure in UI
-            # Port 9000: For file access (e.g., files.domain.com)
-            # Port 9001: For admin console (e.g., minio-console.domain.com)
-            - SERVICE_FQDN_MINIO_9000
-            - SERVICE_FQDN_MINIO_9001
+            # Port 9000: For file access (e.g., files.karldigi.dev)
+            # Port 9001: For admin console (e.g., minio-console.karldigi.dev)
+            SERVICE_FQDN_MINIO_9000: ""
+            SERVICE_FQDN_MINIO_9001: ""
         volumes:
             - minio_data:/data
-        healthcheck:
-            test: ["CMD", "mc", "ready", "local"]
-            interval: 10s
-            timeout: 5s
-            retries: 5
-            start_period: 10s
+
+    # Automatically creates bucket and sets public download permission
+    minio-init:
+        image: minio/mc:latest
+        depends_on:
+            minio:
+                condition: service_started
+        entrypoint: ["sh", "-c"]
+        environment:
+            MINIO_ROOT_USER: ${SERVICE_USER_MINIO:-minioadmin}
+            MINIO_ROOT_PASSWORD: ${SERVICE_PASSWORD_MINIO:?}
+            S3_BUCKET: ${S3_BUCKET:-happy-server}
+        command:
+            - >
+                echo "[minio-init] Setting up MinIO alias...";
+                mc alias set local http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" &&
+                echo "[minio-init] Waiting for MinIO to be ready...";
+                until mc ready --json local >/dev/null 2>&1; do
+                  echo "[minio-init] Still waiting...";
+                  sleep 2;
+                done &&
+                echo "[minio-init] Creating bucket: $S3_BUCKET";
+                mc mb -p local/$S3_BUCKET || true &&
+                echo "[minio-init] Setting anonymous download permission";
+                mc anonymous set download local/$S3_BUCKET || true &&
+                echo "[minio-init] Initialization complete!"
+        restart: "no"
 
 volumes:
     postgres_data:
