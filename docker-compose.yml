@@ -22,7 +22,7 @@ services:
             - REDIS_URL=redis://redis:6379
 
             # Security - required field with no default (must be set in Coolify UI)
-            - SEED=${SEED:?}
+            - HANDY_MASTER_SECRET=${HANDY_MASTER_SECRET:?}
 
             # MinIO/S3 Storage configuration
             - S3_HOST=minio
