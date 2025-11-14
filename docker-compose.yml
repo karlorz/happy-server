@@ -90,8 +90,8 @@ services:
             MINIO_ROOT_USER: ${SERVICE_USER_MINIO:-minioadmin}
             MINIO_ROOT_PASSWORD: ${SERVICE_PASSWORD_MINIO:?}
             # Coolify will set these up based on domains you configure in UI
-            # Port 9000: For file access (e.g., files.karldigi.dev)
-            # Port 9001: For admin console (e.g., minio-console.karldigi.dev)
+            # Port 9000: For file access (e.g., files.domain.com)
+            # Port 9001: For admin console (e.g., minio-console.domain.com)
             SERVICE_FQDN_MINIO_9000: ""
             SERVICE_FQDN_MINIO_9001: ""
         volumes:
@@ -110,11 +110,17 @@ services:
             S3_BUCKET: ${S3_BUCKET:-happy-server}
         command:
             - >
-                echo "[minio-init] Setting up MinIO alias...";
-                mc alias set local http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" &&
                 echo "[minio-init] Waiting for MinIO to be ready...";
+                sleep 5;
+                until wget --spider -q http://minio:9000/minio/health/live 2>/dev/null; do
+                  echo "[minio-init] MinIO not ready yet, waiting...";
+                  sleep 3;
+                done &&
+                echo "[minio-init] MinIO is ready, setting up alias...";
+                mc alias set local http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" &&
+                echo "[minio-init] Verifying MinIO API is fully functional...";
                 until mc ready --json local >/dev/null 2>&1; do
-                  echo "[minio-init] Still waiting...";
+                  echo "[minio-init] API not ready yet, waiting...";
                   sleep 2;
                 done &&
                 echo "[minio-init] Creating bucket: $S3_BUCKET";
